@@ -13,14 +13,16 @@ export function getDb() {
     throw new Error('DATABASE_URL is not set')
   }
   if (!database || !client) {
-    client = postgres(url, { max: 10 })
+    client = postgres(url, { max: 10, idle_timeout: 20, connect_timeout: 10 })
     database = drizzle(client, { schema })
   }
   return database
 }
 
 export async function closeDb() {
-  await client?.end({ timeout: 5 })
+  const current = client
   client = undefined
   database = undefined
+  if (!current) return
+  await current.end({ timeout: 5 })
 }
