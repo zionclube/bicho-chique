@@ -1,8 +1,8 @@
-import { and, asc, count, eq, gt, inArray, lt, sql } from 'drizzle-orm'
+import { and, asc, count, eq, gt, inArray, lt, ne, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { getDb } from '../db/client'
-import { appointments, blockedIntervals, openingHours, pets, services, shopSettings } from '../db/schema'
-import { canClientCancel, classifySlot, saoPauloParts } from './agenda-time'
+import { appointments, blockedIntervals, openingHours, pets, services, shopSettings, users } from '../db/schema'
+import { agendaWindow, canClientCancel, classifySlot, saoPauloParts } from './agenda-time'
 
 const bookingSchema = z.object({
   petId: z.string().uuid('informe o pet'),
@@ -27,6 +27,16 @@ export type PublicAppointment = {
   canCancel: boolean
   pet: { id: string; name: string }
   service: { id: string; name: string; durationMinutes: number }
+}
+
+function overlapWhere(startsAt: Date, endsAt: Date, ignoreId?: string) {
+  const filters = [
+    inArray(appointments.status, ['marcado', 'confirmado']),
+    lt(appointments.startsAt, endsAt),
+    gt(appointments.endsAt, startsAt),
+  ]
+  if (ignoreId) filters.push(ne(appointments.id, ignoreId))
+  return and(...filters)
 }
 
 function firstIssue(error: z.ZodError) {
@@ -160,13 +170,7 @@ export async function createAppointment(clientId: string, input: unknown) {
     const overlapping = await tx
       .select({ value: count() })
       .from(appointments)
-      .where(
-        and(
-          inArray(appointments.status, ['marcado', 'confirmado']),
-          lt(appointments.startsAt, endsAt),
-          gt(appointments.endsAt, start.date),
-        ),
-      )
+      .where(overlapWhere(start.date, endsAt))
     if (Number(overlapping[0]?.value ?? 0) >= settings.capacity) {
       throw new AgendaError('esse horário não está livre', 409)
     }
@@ -208,4 +212,167 @@ export async function cancelAppointment(clientId: string, appointmentId: string)
     .returning({ id: appointments.id })
   if (!updated[0]) throw new AgendaError('este agendamento já está cancelado', 409)
   return loadAppointment(clientId, appointmentId)
+}
+
+export type AdminAppointment = PublicAppointment & {
+  client: { id: string; name: string; email: string }
+  pet: PublicAppointment['pet'] & { size: 'pequeno' | 'medio' | 'grande' }
+}
+
+function toAdminAppointment(row: {
+  id: string
+  startsAt: Date
+  endsAt: Date
+  status: 'marcado' | 'confirmado' | 'cancelado'
+  clientId: string
+  clientName: string
+  clientEmail: string
+  petId: string
+  petName: string
+  petSize: 'pequeno' | 'medio' | 'grande'
+  serviceId: string
+  serviceName: string
+  durationMinutes: number
+}): AdminAppointment {
+  return {
+    ...toPublicAppointment({
+      id: row.id,
+      startsAt: row.startsAt,
+      endsAt: row.endsAt,
+      status: row.status,
+      petId: row.petId,
+      petName: row.petName,
+      serviceId: row.serviceId,
+      serviceName: row.serviceName,
+      durationMinutes: row.durationMinutes,
+    }),
+    client: { id: row.clientId, name: row.clientName, email: row.clientEmail },
+    pet: { id: row.petId, name: row.petName, size: row.petSize },
+  }
+}
+
+const adminAppointmentSelect = {
+  id: appointments.id,
+  startsAt: appointments.startsAt,
+  endsAt: appointments.endsAt,
+  status: appointments.status,
+  clientId: users.id,
+  clientName: users.name,
+  clientEmail: users.email,
+  petId: pets.id,
+  petName: pets.name,
+  petSize: pets.size,
+  serviceId: services.id,
+  serviceName: services.name,
+  durationMinutes: services.durationMinutes,
+}
+
+function adminAppointmentQuery() {
+  return getDb()
+    .select(adminAppointmentSelect)
+    .from(appointments)
+    .innerJoin(users, eq(users.id, appointments.clientId))
+    .innerJoin(pets, eq(pets.id, appointments.petId))
+    .innerJoin(services, eq(services.id, appointments.serviceId))
+}
+
+async function loadAdminAppointment(appointmentId: string) {
+  if (!z.string().uuid().safeParse(appointmentId).success) {
+    throw new AgendaError('agendamento não encontrado', 404)
+  }
+  const rows = await adminAppointmentQuery().where(eq(appointments.id, appointmentId)).limit(1)
+  const row = rows[0]
+  if (!row) throw new AgendaError('agendamento não encontrado', 404)
+  return toAdminAppointment(row)
+}
+
+export async function listAgenda(view: string, date: string) {
+  if (view !== 'dia' && view !== 'semana' && view !== 'mes') {
+    throw new AgendaError('informe o dia, a semana ou o mês', 400)
+  }
+  const window = agendaWindow(view, date)
+  if (!window) throw new AgendaError('data inválida', 400)
+  const rows = await adminAppointmentQuery()
+    .where(and(lt(appointments.startsAt, window.end), gt(appointments.endsAt, window.start)))
+    .orderBy(asc(appointments.startsAt))
+  return {
+    from: window.start,
+    until: window.end,
+    appointments: rows.map(toAdminAppointment),
+  }
+}
+
+export async function confirmAppointment(appointmentId: string) {
+  const current = await loadAdminAppointment(appointmentId)
+  if (current.status === 'confirmado') throw new AgendaError('este agendamento já está confirmado', 409)
+  if (current.status === 'cancelado') throw new AgendaError('agendamento cancelado não pode ser confirmado', 409)
+  const updated = await getDb()
+    .update(appointments)
+    .set({ status: 'confirmado' })
+    .where(and(eq(appointments.id, appointmentId), eq(appointments.status, 'marcado')))
+    .returning({ id: appointments.id })
+  if (!updated[0]) throw new AgendaError('este agendamento já está confirmado', 409)
+  return loadAdminAppointment(appointmentId)
+}
+
+export async function adminCancelAppointment(appointmentId: string) {
+  const current = await loadAdminAppointment(appointmentId)
+  if (current.status === 'cancelado') throw new AgendaError('este agendamento já está cancelado', 409)
+  const updated = await getDb()
+    .update(appointments)
+    .set({ status: 'cancelado' })
+    .where(
+      and(eq(appointments.id, appointmentId), inArray(appointments.status, ['marcado', 'confirmado'])),
+    )
+    .returning({ id: appointments.id })
+  if (!updated[0]) throw new AgendaError('este agendamento já está cancelado', 409)
+  return loadAdminAppointment(appointmentId)
+}
+
+export async function rescheduleAppointment(appointmentId: string, startsAt: string) {
+  if (!z.string().uuid().safeParse(appointmentId).success) {
+    throw new AgendaError('agendamento não encontrado', 404)
+  }
+  const start = parseStart(startsAt)
+  await getDb().transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(pg_catalog.hashtext('bicho_chique_agenda')::bigint)`)
+    const currentRows = await tx.select().from(appointments).where(eq(appointments.id, appointmentId)).limit(1)
+    const current = currentRows[0]
+    if (!current) throw new AgendaError('agendamento não encontrado', 404)
+    if (current.status === 'cancelado') throw new AgendaError('agendamento cancelado não pode ser remarcado', 409)
+
+    const serviceRows = await tx.select().from(services).where(eq(services.id, current.serviceId)).limit(1)
+    const service = serviceRows[0]
+    if (!service) throw new AgendaError('serviço não encontrado', 404)
+    const settingsRows = await tx.select().from(shopSettings).where(eq(shopSettings.id, 1)).limit(1)
+    const settings = settingsRows[0]
+    if (!settings) throw new AgendaError('não foi possível concluir. tente de novo.', 500)
+
+    const occupied = service.durationMinutes + settings.bufferMinutes
+    const shifts = await tx.select().from(openingHours).where(eq(openingHours.weekday, start.weekday))
+    const fit = classifySlot(start.minutes, occupied, shifts)
+    if (fit === 'closed') throw new AgendaError('a loja está fechada nesse horário', 400)
+    if (fit === 'overflow') throw new AgendaError('esse serviço não termina dentro do expediente', 400)
+
+    const endsAt = new Date(start.date.getTime() + occupied * 60_000)
+    const blocked = await tx
+      .select({ value: count() })
+      .from(blockedIntervals)
+      .where(and(lt(blockedIntervals.startsAt, endsAt), gt(blockedIntervals.endsAt, start.date)))
+    if (Number(blocked[0]?.value ?? 0) > 0) throw new AgendaError('esse horário está bloqueado', 409)
+
+    const overlapping = await tx
+      .select({ value: count() })
+      .from(appointments)
+      .where(overlapWhere(start.date, endsAt, appointmentId))
+    if (Number(overlapping[0]?.value ?? 0) >= settings.capacity) {
+      throw new AgendaError('esse horário não está livre', 409)
+    }
+
+    await tx
+      .update(appointments)
+      .set({ startsAt: start.date, endsAt })
+      .where(eq(appointments.id, appointmentId))
+  })
+  return loadAdminAppointment(appointmentId)
 }

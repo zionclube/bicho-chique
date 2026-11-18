@@ -48,3 +48,19 @@ export function sessionCookie(token: string, expiresAt: Date, request: Request) 
 export function clearSessionCookie() {
   return `${sessionCookieName}=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`
 }
+
+export async function runJson(run: () => Promise<{ status?: number; body: unknown }>, label: string) {
+  try {
+    const result = await run()
+    return Response.json(result.body, {
+      status: result.status ?? 200,
+      headers: { 'Cache-Control': 'no-store' },
+    })
+  } catch (error) {
+    if (error instanceof Error && 'status' in error && typeof error.status === 'number') {
+      return jsonError(error.status, error.message)
+    }
+    console.error(label)
+    return jsonError(500, 'não foi possível concluir. tente de novo.')
+  }
+}

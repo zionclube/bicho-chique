@@ -14,3 +14,12 @@ export async function requireUser(request: Request) {
     return { ok: false as const, response: jsonError(500, 'não foi possível concluir. tente de novo.') }
   }
 }
+
+export async function requireAdmin(request: Request) {
+  const auth = await requireUser(request)
+  if (!auth.ok) return auth
+  if (auth.user.role !== 'admin') {
+    return { ok: false as const, response: jsonError(403, 'esta ação é da administração') }
+  }
+  return auth
+}

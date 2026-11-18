@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { canClientCancel, classifySlot, saoPauloParts } from './agenda-time.ts'
+import { agendaWindow, canClientCancel, classifySlot, saoPauloParts } from './agenda-time.ts'
 
 const morning = [{ startsAt: '08:00:00', endsAt: '12:00:00' }]
 const day = [
@@ -43,4 +43,17 @@ test('o cliente cancela até 24 horas antes, inclusive no instante exato', () =>
   assert.equal(canClientCancel(start, 'confirmado', limit), true)
   assert.equal(canClientCancel(start, 'marcado', limit + 1), false)
   assert.equal(canClientCancel(start, 'cancelado', limit), false)
+})
+
+test('dia, semana e mês usam a meia-noite de São Paulo', () => {
+  const day = agendaWindow('dia', '2026-11-23')
+  assert.equal(day?.start.toISOString(), '2026-11-23T03:00:00.000Z')
+  assert.equal(day?.end.toISOString(), '2026-11-24T03:00:00.000Z')
+  const week = agendaWindow('semana', '2026-11-23')
+  assert.equal(week?.start.toISOString(), '2026-11-23T03:00:00.000Z')
+  assert.equal(week?.end.toISOString(), '2026-11-30T03:00:00.000Z')
+  const month = agendaWindow('mes', '2026-11-23')
+  assert.equal(month?.start.toISOString(), '2026-11-01T03:00:00.000Z')
+  assert.equal(month?.end.toISOString(), '2026-12-01T03:00:00.000Z')
+  assert.equal(agendaWindow('dia', '2026-02-31'), null)
 })

@@ -61,3 +61,44 @@ export function canClientCancel(startsAt: Date, status: string, now = Date.now()
   if (status !== 'marcado' && status !== 'confirmado') return false
   return now <= startsAt.getTime() - dayMs
 }
+
+function isCalendarDate(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return false
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const probe = new Date(Date.UTC(year, month - 1, day))
+  return probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day
+}
+
+function addCalendarDays(value: string, days: number) {
+  const [year, month, day] = value.split('-').map(Number)
+  const next = new Date(Date.UTC(year, month - 1, day + days))
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-${pad(next.getUTCDate())}`
+}
+
+function saoPauloMidnight(value: string) {
+  return new Date(`${value}T00:00:00-03:00`)
+}
+
+export function agendaWindow(view: 'dia' | 'semana' | 'mes', date: string) {
+  if (!isCalendarDate(date)) return null
+  if (view === 'dia') {
+    return { start: saoPauloMidnight(date), end: saoPauloMidnight(addCalendarDays(date, 1)) }
+  }
+  if (view === 'semana') {
+    const weekday = saoPauloParts(new Date(`${date}T12:00:00-03:00`)).weekday
+    if (!weekday) return null
+    const monday = addCalendarDays(date, 1 - weekday)
+    return { start: saoPauloMidnight(monday), end: saoPauloMidnight(addCalendarDays(monday, 7)) }
+  }
+  if (view === 'mes') {
+    const [year, month] = date.split('-').map(Number)
+    const start = `${year}-${String(month).padStart(2, '0')}-01`
+    const nextMonth = month === 12 ? `${year + 1}-01-01` : `${year}-${String(month + 1).padStart(2, '0')}-01`
+    return { start: saoPauloMidnight(start), end: saoPauloMidnight(nextMonth) }
+  }
+  return null
+}
