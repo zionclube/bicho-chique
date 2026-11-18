@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { FormEvent, useEffect, useState, type ReactNode } from 'react'
+import { formatShop, lojaApi, shopInstant, todayInShop } from './loja-api'
 
 const lunaPhoto =
   'https://images.unsplash.com/photo-1678153184494-1f6fc14a673d?crop=entropy&cs=tinysrgb&fit=crop&fm=jpg&q=85&w=900'
@@ -135,41 +136,116 @@ function Icon({
   )
 }
 
-const timeline = [
-  {
-    time: '09:00',
-    title: 'Chegada e acolhimento',
-    text: 'Adaptação tranquila ao ambiente',
-    active: true,
-  },
-  { time: '09:15', title: 'Banho dermatológico', text: 'Produtos hipoalergênicos da Luna' },
-  { time: '10:05', title: 'Secagem sem pressa', text: 'Temperatura suave e pausas' },
-  { time: '10:45', title: 'Prontinha para você', text: 'Enviaremos uma foto antes' },
-]
+type Tab = 'inicio' | 'agenda' | 'pets' | 'conta'
 
-function formatPhone(value: string) {
-  const digits = value.replace(/\D/g, '').slice(0, 11)
-  if (digits.length <= 2) return digits
-  if (digits.length <= 7) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`
-  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`
+type User = {
+  id: string
+  role: 'client' | 'admin'
+  name: string
+  email: string
+  phone: string | null
+  cpfMasked: string | null
+}
+
+type Pet = {
+  id: string
+  name: string
+  species: string
+  breed: string
+  size: 'pequeno' | 'medio' | 'grande'
+}
+
+type Service = { id: string; name: string; durationMinutes: number }
+
+type Appointment = {
+  id: string
+  startsAt: string
+  endsAt: string
+  status: 'marcado' | 'confirmado' | 'cancelado'
+  canCancel: boolean
+  pet: { name: string }
+  service: { name: string; durationMinutes: number }
+}
+
+function shopDayLabel(value: Date = new Date()) {
+  const label = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  }).format(value)
+  return label.charAt(0).toUpperCase() + label.slice(1)
+}
+
+function nextCare(items: Appointment[]) {
+  const now = Date.now()
+  return items
+    .filter(
+      (item) =>
+        (item.status === 'marcado' || item.status === 'confirmado') &&
+        new Date(item.startsAt).getTime() >= now,
+    )
+    .sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime())[0]
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'inicio' | 'agenda' | 'pets' | 'reserva'>('inicio')
+  const [activeTab, setActiveTab] = useState<Tab>('inicio')
   const [bookingOpen, setBookingOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
-  const [step, setStep] = useState(1)
-  const [selectedTime, setSelectedTime] = useState('09:00')
-  const [confirmed, setConfirmed] = useState(false)
-  const [petName, setPetName] = useState('')
-  const [tutorName, setTutorName] = useState('')
-  const [phone, setPhone] = useState('')
   const [toast, setToast] = useState('')
+  const [error, setError] = useState('')
+  const [ready, setReady] = useState(false)
+  const [dayLabel, setDayLabel] = useState('Cachoeirinha, RS')
+  const [user, setUser] = useState<User | null>(null)
+  const [pets, setPets] = useState<Pet[]>([])
+  const [services, setServices] = useState<Service[]>([])
+  const [appointments, setAppointments] = useState<Appointment[]>([])
 
   const notify = (message: string) => {
     setToast(message)
     window.setTimeout(() => setToast(''), 2600)
   }
+
+  async function loadShop(current: User) {
+    if (current.role !== 'client') {
+      setPets([])
+      setServices([])
+      setAppointments([])
+      return
+    }
+    const [petBody, serviceBody, agendaBody] = await Promise.all([
+      lojaApi<{ pets: Pet[] }>('/api/pets'),
+      lojaApi<{ services: Service[] }>('/api/servicos'),
+      lojaApi<{ appointments: Appointment[] }>('/api/agendamentos'),
+    ])
+    setPets(petBody.pets)
+    setServices(serviceBody.services)
+    setAppointments(agendaBody.appointments)
+  }
+
+  useEffect(() => {
+    setDayLabel(shopDayLabel())
+    void lojaApi<{ user: User }>('/api/conta/eu')
+      .then(async (body) => {
+        setUser(body.user)
+        await loadShop(body.user)
+      })
+      .catch(() => setUser(null))
+      .finally(() => setReady(true))
+  }, [])
+
+  function openBooking() {
+    setError('')
+    setBookingOpen(true)
+  }
+
+  async function refresh() {
+    if (!user) return
+    await loadShop(user)
+  }
+
+  const upcoming = nextCare(appointments)
+  const firstPet = pets[0]
 
   return (
     <div className="min-h-screen bg-[#f7f5ef] text-[#24362f]">
@@ -181,41 +257,52 @@ export default function App() {
       )}
 
       <header className="topbar">
-        <button
-          className="brand"
-          onClick={() => setActiveTab('inicio')}
-          aria-label="Ir para o início"
-        >
-          <img
-            className="brand-logo"
-            src="/assets/bicho-chique-logo.png"
-            alt="Bicho Chique Estética Animal"
-          />
+        <button className="brand" onClick={() => setActiveTab('inicio')} aria-label="Ir para o início">
+          <img className="brand-logo" src="/assets/bicho-chique-logo.png" alt="Bicho Chique Estética Animal" />
         </button>
         <nav className="desktop-nav" aria-label="Navegação principal">
-          {['Início', 'Agenda', 'Meus pets'].map((item) => (
-            <button
-              key={item}
-              onClick={() =>
-                setActiveTab(item === 'Início' ? 'inicio' : item === 'Agenda' ? 'agenda' : 'pets')
-              }
-              className={
-                (item === 'Início' && activeTab === 'inicio') ||
-                (item === 'Agenda' && activeTab === 'agenda') ||
-                (item === 'Meus pets' && activeTab === 'pets')
-                  ? 'active'
-                  : ''
-              }
-            >
-              {item}
+          {(
+            [
+              ['Início', 'inicio'],
+              ['Agenda', 'agenda'],
+              ['Meus pets', 'pets'],
+            ] as const
+          ).map(([label, tab]) => (
+            <button key={tab} onClick={() => setActiveTab(tab)} className={activeTab === tab ? 'active' : ''}>
+              {label}
             </button>
           ))}
         </nav>
         <div className="header-actions">
-          <a className="reservation-access" href="/conta">
-            Entrar
-          </a>
-          <button className="reservation-access" onClick={() => setActiveTab('reserva')}>
+          {user?.role === 'admin' && (
+            <a className="reservation-access" href="/painel">
+              Administração
+            </a>
+          )}
+          {user ? (
+            <button
+              className="reservation-access"
+              onClick={() => {
+                void lojaApi('/api/conta/sair', { method: 'POST' }).then(() => {
+                  setUser(null)
+                  setPets([])
+                  setAppointments([])
+                  setServices([])
+                  setActiveTab('inicio')
+                })
+              }}
+            >
+              Sair
+            </button>
+          ) : (
+            <button className="reservation-access" onClick={() => setActiveTab('conta')}>
+              Entrar
+            </button>
+          )}
+          <button
+            className="reservation-access"
+            onClick={() => setActiveTab(user?.role === 'client' ? 'agenda' : 'conta')}
+          >
             <Icon name="shield" size={17} />
             <span>Consultar reserva</span>
           </button>
@@ -227,18 +314,15 @@ export default function App() {
           <>
             <section className="welcome">
               <div>
-                <p className="eyebrow">Quarta-feira, 12 de junho</p>
+                <p className="eyebrow">{dayLabel}</p>
                 <h1>Cuidado no tempo do seu pet.</h1>
-                <p>Atendimento exclusivo, tranquilo e sem cadastro.</p>
+                <p>
+                  {user
+                    ? `Olá, ${user.name.split(' ')[0]}. Seus horários ficam nesta conta.`
+                    : 'Entre na sua conta para marcar o horário.'}
+                </p>
               </div>
-              <button
-                className="primary-button desktop-only"
-                onClick={() => {
-                  setStep(1)
-                  setConfirmed(false)
-                  setBookingOpen(true)
-                }}
-              >
+              <button className="primary-button desktop-only" onClick={openBooking}>
                 <Icon name="plus" size={18} /> Novo agendamento
               </button>
             </section>
@@ -249,45 +333,47 @@ export default function App() {
                   <span></span> Próximo cuidado
                 </div>
                 <div className="appointment-content">
-                  <img src={lunaPhoto} alt="Luna, uma cachorrinha pequena com bandana verde" />
+                  <img src={lunaPhoto} alt="Cachorro pequeno, ilustração da vitrine" />
                   <div className="appointment-copy">
-                    <div className="date-chip">
-                      <strong>18</strong>
-                      <span>JUN</span>
-                    </div>
-                    <div>
-                      <h2>Banho dermatológico da Luna</h2>
-                      <p>
-                        <Icon name="clock" size={17} /> Terça-feira, das 09:00 às 11:00
-                      </p>
-                      <div className="assurances">
-                        <span>
-                          <Icon name="shield" size={16} /> Sala exclusiva
-                        </span>
-                        <span>
-                          <Icon name="leaf" size={16} /> Linha hipoalergênica
-                        </span>
+                    {upcoming ? (
+                      <>
+                        <div className="date-chip">
+                          <strong>{new Date(upcoming.startsAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit' })}</strong>
+                          <span>
+                            {new Date(upcoming.startsAt)
+                              .toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', month: 'short' })
+                              .replace('.', '')
+                              .toUpperCase()}
+                          </span>
+                        </div>
+                        <div>
+                          <h2>
+                            {upcoming.service.name} de {upcoming.pet.name}
+                          </h2>
+                          <p>
+                            <Icon name="clock" size={17} /> {formatShop(upcoming.startsAt)} · {upcoming.service.durationMinutes} min · {upcoming.status}
+                          </p>
+                        </div>
+                      </>
+                    ) : (
+                      <div>
+                        <h2>{ready ? 'Nenhum cuidado marcado' : 'Carregando…'}</h2>
+                        <p>O horário escolhido precisa caber inteiro no expediente da loja.</p>
                       </div>
-                    </div>
+                    )}
                   </div>
                 </div>
                 <div className="appointment-footer">
-                  <div className="specialist">
-                    <span className="specialist-avatar">MA</span>
-                    <span>
-                      Com Marina Alves<small>Especialista em peles sensíveis</small>
-                    </span>
-                  </div>
-                  <button onClick={() => setActiveTab('agenda')}>
-                    Ver detalhes <Icon name="arrow" size={17} />
+                  <button onClick={() => setActiveTab(user?.role === 'client' ? 'agenda' : 'conta')}>
+                    {upcoming ? 'Ver na agenda' : 'Marcar horário'} <Icon name="arrow" size={17} />
                   </button>
                 </div>
               </div>
               <aside className="exclusive-note">
                 <Icon name="sparkle" size={26} />
                 <div>
-                  <strong>Este horário é só da Luna.</strong>
-                  <p>Sem esperas, sem gaiolas e sem contato com outros pets.</p>
+                  <strong>Um atendimento por vez.</strong>
+                  <p>A capacidade da loja define quantos horários podem ocupar o mesmo intervalo.</p>
                 </div>
               </aside>
             </section>
@@ -296,52 +382,41 @@ export default function App() {
               <section className="section-card care-card">
                 <div className="section-heading">
                   <div>
-                    <p className="eyebrow">Com calma, do início ao fim</p>
-                    <h2>Como será o cuidado</h2>
+                    <p className="eyebrow">No horário marcado</p>
+                    <h2>O que a agenda guarda</h2>
                   </div>
-                  <span className="duration">
-                    <Icon name="clock" size={16} /> 2 horas reservadas
-                  </span>
+                  {upcoming && (
+                    <span className="duration">
+                      <Icon name="clock" size={16} /> {upcoming.service.durationMinutes} min
+                    </span>
+                  )}
                 </div>
-                <div className="timeline">
-                  {timeline.map((item, index) => (
-                    <div className="timeline-item" key={item.time}>
-                      <div className={`timeline-dot ${item.active ? 'active' : ''}`}>
-                        {index === 0 ? <Icon name="heart" size={15} /> : index + 1}
-                      </div>
-                      <time>{item.time}</time>
-                      <div>
-                        <strong>{item.title}</strong>
-                        <p>{item.text}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <p>
+                  {upcoming
+                    ? `${upcoming.pet.name} começa às ${formatShop(upcoming.startsAt)}. O fim do horário inclui a duração do serviço.`
+                    : 'Depois de entrar, escolha o pet, o serviço e o minuto. A loja recusa o horário que não termina dentro do expediente.'}
+                </p>
               </section>
 
               <section className="section-card pet-card">
                 <div className="pet-photo">
-                  <img
-                    src={carePhoto}
-                    alt="Cachorrinha branca enrolada em uma toalha após o banho"
-                  />
-                  <span>Perfil completo</span>
+                  <img src={carePhoto} alt="Cachorro enrolado em uma toalha, ilustração da vitrine" />
+                  <span>{firstPet ? 'Ficha da conta' : 'Sem pet ainda'}</span>
                 </div>
                 <div className="pet-info">
                   <div className="pet-title">
                     <div>
-                      <p className="eyebrow">Minha pet</p>
-                      <h2>Luna</h2>
+                      <p className="eyebrow">Meu pet</p>
+                      <h2>{firstPet ? firstPet.name : 'Cadastre o pet'}</h2>
                     </div>
-                    <span>Shih-tzu • 5 anos</span>
+                    {firstPet && (
+                      <span>
+                        {firstPet.species} • {firstPet.breed} • {firstPet.size}
+                      </span>
+                    )}
                   </div>
-                  <div className="pet-tags">
-                    <span>Pele sensível</span>
-                    <span>Água morna</span>
-                    <span>Sem perfume</span>
-                  </div>
-                  <button onClick={() => setActiveTab('pets')}>
-                    Ver ficha de cuidados <Icon name="arrow" size={17} />
+                  <button onClick={() => setActiveTab(user ? 'pets' : 'conta')}>
+                    {firstPet ? 'Ver ficha' : 'Entrar para cadastrar'} <Icon name="arrow" size={17} />
                   </button>
                 </div>
               </section>
@@ -352,15 +427,12 @@ export default function App() {
                 <Icon name="message" size={25} />
               </div>
               <div>
-                <p className="eyebrow">Você acompanha de perto</p>
-                <h2>Atualizações durante o banho</h2>
-                <p>
-                  Enviaremos uma mensagem quando a Luna chegar, após o banho e assim que estiver
-                  pronta — com foto, é claro.
-                </p>
+                <p className="eyebrow">Conversa de demonstração</p>
+                <h2>Falar com a equipe</h2>
+                <p>O botão abre uma conversa visual. A mensagem não é enviada à loja.</p>
               </div>
               <button onClick={() => setChatOpen(true)}>
-                Falar com a equipe <Icon name="arrow" size={17} />
+                Abrir a demonstração <Icon name="arrow" size={17} />
               </button>
             </section>
           </>
@@ -368,284 +440,114 @@ export default function App() {
 
         {activeTab === 'agenda' && (
           <AgendaView
-            onBook={(time) => {
-              setSelectedTime(time)
-              setStep(1)
-              setConfirmed(false)
-              setBookingOpen(true)
+            user={user}
+            appointments={appointments}
+            onNeedAccount={() => setActiveTab('conta')}
+            onBook={openBooking}
+            onCancel={async (id) => {
+              setError('')
+              try {
+                await lojaApi(`/api/agendamentos/${id}/cancelar`, { method: 'POST' })
+                await refresh()
+                notify('Agendamento cancelado')
+              } catch (reason) {
+                setError(reason instanceof Error ? reason.message : 'não foi possível cancelar')
+              }
+            }}
+            error={error}
+          />
+        )}
+        {activeTab === 'pets' && (
+          <PetView
+            user={user}
+            pets={pets}
+            onNeedAccount={() => setActiveTab('conta')}
+            onCreate={async (event) => {
+              event.preventDefault()
+              setError('')
+              const form = event.currentTarget
+              const data = new FormData(form)
+              try {
+                await lojaApi('/api/pets', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    name: String(data.get('name') ?? ''),
+                    species: String(data.get('species') ?? ''),
+                    breed: String(data.get('breed') ?? ''),
+                    size: String(data.get('size') ?? ''),
+                  }),
+                })
+                form.reset()
+                await refresh()
+                notify('Pet cadastrado')
+              } catch (reason) {
+                setError(reason instanceof Error ? reason.message : 'não foi possível salvar o pet')
+              }
+            }}
+            error={error}
+          />
+        )}
+        {activeTab === 'conta' && (
+          <AccountView
+            user={user}
+            onUser={async (next) => {
+              setUser(next)
+              await loadShop(next)
+              setActiveTab(next.role === 'admin' ? 'inicio' : 'agenda')
+              notify(next.role === 'admin' ? 'Conta da loja aberta' : 'Conta aberta')
             }}
           />
         )}
-        {activeTab === 'pets' && <PetView />}
-        {activeTab === 'reserva' && <ReservationView />}
       </main>
 
-      <button
-        className="chat-fab"
-        onClick={() => setChatOpen(true)}
-        aria-label="Falar com a equipe"
-      >
+      <button className="chat-fab" onClick={() => setChatOpen(true)} aria-label="Abrir a conversa de demonstração">
         <Icon name="message" size={23} />
-        <span>Podemos ajudar?</span>
+        <span>Demonstração</span>
       </button>
 
       <nav className="mobile-nav" aria-label="Navegação mobile">
-        <button
-          className={activeTab === 'inicio' ? 'active' : ''}
-          onClick={() => setActiveTab('inicio')}
-        >
+        <button className={activeTab === 'inicio' ? 'active' : ''} onClick={() => setActiveTab('inicio')}>
           <Icon name="home" />
           <span>Início</span>
         </button>
-        <button
-          className={activeTab === 'agenda' ? 'active' : ''}
-          onClick={() => setActiveTab('agenda')}
-        >
+        <button className={activeTab === 'agenda' ? 'active' : ''} onClick={() => setActiveTab('agenda')}>
           <Icon name="calendar" />
           <span>Agenda</span>
         </button>
-        <button
-          className="book-mobile"
-          onClick={() => {
-            setStep(1)
-            setConfirmed(false)
-            setBookingOpen(true)
-          }}
-        >
+        <button className="book-mobile" onClick={openBooking} aria-label="Novo agendamento">
           <Icon name="plus" size={25} />
         </button>
-        <button
-          className={activeTab === 'pets' ? 'active' : ''}
-          onClick={() => setActiveTab('pets')}
-        >
+        <button className={activeTab === 'pets' ? 'active' : ''} onClick={() => setActiveTab('pets')}>
           <Icon name="paw" />
           <span>Pets</span>
         </button>
-        <button
-          className={activeTab === 'reserva' ? 'active' : ''}
-          onClick={() => setActiveTab('reserva')}
-        >
-          <Icon name="shield" />
-          <span>Reserva</span>
+        <button className={activeTab === 'conta' ? 'active' : ''} onClick={() => setActiveTab('conta')}>
+          <Icon name="user" />
+          <span>Conta</span>
         </button>
       </nav>
 
       {bookingOpen && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(e) => e.target === e.currentTarget && setBookingOpen(false)}
-        >
-          <div className="modal">
-            <button
-              className="modal-close"
-              onClick={() => setBookingOpen(false)}
-              aria-label="Fechar"
-            >
-              <Icon name="close" />
-            </button>
-            {!confirmed ? (
-              <>
-                <div className="modal-progress">
-                  <span className={step >= 1 ? 'done' : ''}></span>
-                  <span className={step >= 2 ? 'done' : ''}></span>
-                  <span className={step >= 3 ? 'done' : ''}></span>
-                </div>
-                <div className="guest-booking-note">
-                  <Icon name="check" size={15} />
-                  <span>
-                    <strong>Agendamento rápido</strong>
-                    <small>Sem criar conta ou cadastrar senha.</small>
-                  </span>
-                </div>
-                <p className="eyebrow">Agendamento • passo {step} de 3</p>
-                {step === 1 && (
-                  <div className="step-content">
-                    <h2>Quem vem para o cuidado?</h2>
-                    <p>Precisamos apenas dos dados essenciais para confirmar o horário.</p>
-                    <div className="booking-fields">
-                      <label className="pet-name-field">
-                        Nome do tutor
-                        <span>
-                          <Icon name="user" size={20} />
-                          <input
-                            autoFocus
-                            value={tutorName}
-                            onChange={(event) => setTutorName(event.target.value)}
-                            placeholder="Seu nome"
-                            autoComplete="name"
-                          />
-                        </span>
-                      </label>
-                      <label className="pet-name-field">
-                        Telefone
-                        <span>
-                          <Icon name="message" size={20} />
-                          <input
-                            type="tel"
-                            value={phone}
-                            onChange={(event) => setPhone(formatPhone(event.target.value))}
-                            placeholder="(51) 99999-9999"
-                            autoComplete="tel"
-                            inputMode="tel"
-                          />
-                        </span>
-                      </label>
-                      <label className="pet-name-field full-width">
-                        Nome do cachorro
-                        <span>
-                          <Icon name="paw" size={20} />
-                          <input
-                            value={petName}
-                            onChange={(event) => setPetName(event.target.value)}
-                            placeholder="Ex.: Luna"
-                          />
-                        </span>
-                      </label>
-                    </div>
-                    <div className="minimal-data-note">
-                      <Icon name="shield" size={16} />
-                      Usamos esses dados somente para identificar e confirmar o agendamento.
-                    </div>
-                  </div>
-                )}
-                {step === 2 && (
-                  <div className="step-content">
-                    <h2>Escolha o melhor horário</h2>
-                    <p>Todos os horários garantem atendimento exclusivo.</p>
-                    <div className="date-row">
-                      <button>
-                        <small>SEG</small>17
-                      </button>
-                      <button className="selected">
-                        <small>TER</small>18
-                      </button>
-                      <button>
-                        <small>QUA</small>19
-                      </button>
-                      <button>
-                        <small>QUI</small>20
-                      </button>
-                    </div>
-                    <div className="time-grid">
-                      {['09:00', '11:30', '14:00', '16:30'].map((time) => (
-                        <button
-                          className={selectedTime === time ? 'selected' : ''}
-                          onClick={() => setSelectedTime(time)}
-                          key={time}
-                        >
-                          {time}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {step === 3 && (
-                  <div className="step-content">
-                    <h2>Confira os dados.</h2>
-                    <p>Você não precisa criar uma conta para confirmar.</p>
-                    <div className="privacy-assurance">
-                      <span>
-                        <Icon name="shield" size={20} />
-                      </span>
-                      <div>
-                        <strong>Cadastro mínimo</strong>
-                        <small>Não solicitamos e-mail, documento, endereço ou senha.</small>
-                      </div>
-                    </div>
-                    <div className="summary-box">
-                      <div>
-                        <Icon name="paw" />
-                        <span>
-                          <small>Pet e serviço</small>
-                          <strong>{petName} • Banho dermatológico</strong>
-                        </span>
-                      </div>
-                      <div>
-                        <Icon name="user" />
-                        <span>
-                          <small>Tutor e contato</small>
-                          <strong>
-                            {tutorName} • {phone}
-                          </strong>
-                        </span>
-                      </div>
-                      <div>
-                        <Icon name="calendar" />
-                        <span>
-                          <small>Data e horário</small>
-                          <strong>18 de junho • {selectedTime}</strong>
-                        </span>
-                      </div>
-                      <div>
-                        <Icon name="shield" />
-                        <span>
-                          <small>Garantia</small>
-                          <strong>Sala exclusiva por 2 horas</strong>
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                <div className="modal-actions">
-                  {step > 1 && (
-                    <button className="secondary-button" onClick={() => setStep(step - 1)}>
-                      Voltar
-                    </button>
-                  )}
-                  <button
-                    className="primary-button"
-                    onClick={() => {
-                      if (
-                        step === 1 &&
-                        (!petName.trim() ||
-                          !tutorName.trim() ||
-                          phone.replace(/\D/g, '').length < 10)
-                      ) {
-                        notify('Preencha nome do tutor, telefone e nome do cachorro')
-                      } else if (step < 3) {
-                        setStep(step + 1)
-                      } else {
-                        setConfirmed(true)
-                      }
-                    }}
-                  >
-                    {step === 3 ? 'Confirmar agendamento' : 'Continuar'}{' '}
-                    <Icon name="arrow" size={17} />
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="success-state">
-                <span>
-                  <Icon name="check" size={32} />
-                </span>
-                <p className="eyebrow">Agendamento confirmado</p>
-                <h2>O tempo de {petName} está reservado.</h2>
-                <p>
-                  Terça-feira, 18 de junho às {selectedTime}. Para consultar ou alterar a reserva,
-                  use o telefone informado no agendamento.
-                </p>
-                <div className="booking-code">
-                  <span>
-                    <small>TELEFONE PARA CONSULTA</small>
-                    <strong>{phone}</strong>
-                  </span>
-                  <Icon name="message" size={18} />
-                </div>
-                <button
-                  className="primary-button"
-                  onClick={() => {
-                    setBookingOpen(false)
-                    setActiveTab('agenda')
-                    notify('Agendamento adicionado à agenda')
-                  }}
-                >
-                  Ver na minha agenda
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+        <BookingModal
+          user={user}
+          pets={pets}
+          services={services}
+          onClose={() => setBookingOpen(false)}
+          onNeedAccount={() => {
+            setBookingOpen(false)
+            setActiveTab('conta')
+          }}
+          onNeedPet={() => {
+            setBookingOpen(false)
+            setActiveTab('pets')
+          }}
+          onBooked={async () => {
+            setBookingOpen(false)
+            await refresh()
+            setActiveTab('agenda')
+            notify('Horário marcado')
+          }}
+        />
       )}
 
       {chatOpen && <ChatPanel onClose={() => setChatOpen(false)} />}
@@ -653,235 +555,371 @@ export default function App() {
   )
 }
 
-function AgendaView({ onBook }: { onBook: (time: string) => void }) {
-  const [selectedDay, setSelectedDay] = useState(18)
-  const [selectedSlot, setSelectedSlot] = useState('09:00')
-  const days = [
-    { week: 'SEG', day: 17, available: 2 },
-    { week: 'TER', day: 18, available: 4 },
-    { week: 'QUA', day: 19, available: 1 },
-    { week: 'QUI', day: 20, available: 3 },
-    { week: 'SEX', day: 21, available: 2 },
-  ]
-  const slots = ['09:00', '11:30', '14:00', '16:30']
-
+function AgendaView({
+  user,
+  appointments,
+  onNeedAccount,
+  onBook,
+  onCancel,
+  error,
+}: {
+  user: User | null
+  appointments: Appointment[]
+  onNeedAccount: () => void
+  onBook: () => void
+  onCancel: (id: string) => Promise<void>
+  error: string
+}) {
   return (
     <div className="inner-page">
       <div className="page-title">
         <div>
-          <p className="eyebrow">Escolha com tranquilidade</p>
-          <h1>Horários disponíveis</h1>
-          <p>Veja a semana e reserve sem login, em poucos passos.</p>
+          <p className="eyebrow">Sua conta</p>
+          <h1>Agenda</h1>
+          <p>Os horários marcados e confirmados ocupam a loja. Cancelar até 24 horas antes libera o intervalo.</p>
         </div>
+        <button className="primary-button" onClick={user?.role === 'client' ? onBook : onNeedAccount}>
+          Novo agendamento
+        </button>
       </div>
-
-      <div className="schedule-layout">
-        <section className="calendar-card">
-          <div className="calendar-head">
-            <button aria-label="Semana anterior">←</button>
-            <div>
-              <strong>17 — 21 de junho</strong>
-              <small>Junho de 2025</small>
-            </div>
-            <button aria-label="Próxima semana">→</button>
-          </div>
-          <div className="week-days">
-            {days.map((item) => (
-              <button
-                key={item.day}
-                className={selectedDay === item.day ? 'selected' : ''}
-                onClick={() => setSelectedDay(item.day)}
-              >
-                <small>{item.week}</small>
-                <strong>{item.day}</strong>
-                <span>{item.available} horários</span>
+      {error && <p className="account-error">{error}</p>}
+      {!user && <p>Entre na conta para ver os horários.</p>}
+      {user?.role === 'admin' && (
+        <p>
+          Esta conta é da loja. A agenda completa está na <a href="/painel">administração</a>.
+        </p>
+      )}
+      {user?.role === 'client' && appointments.length === 0 && <p>Nenhum agendamento.</p>}
+      <div className="account-card">
+        {appointments.map((item) => (
+          <div className="account-row" key={item.id}>
+            <p>
+              {formatShop(item.startsAt)} · {item.pet.name} · {item.service.name} · {item.status}
+            </p>
+            {item.canCancel && (
+              <button className="secondary-button" onClick={() => void onCancel(item.id)}>
+                Cancelar
               </button>
-            ))}
+            )}
           </div>
-          <div className="available-slots">
-            <div className="slots-heading">
-              <div>
-                <p className="eyebrow">Terça-feira, {selectedDay} de junho</p>
-                <h2>Qual horário fica melhor?</h2>
-              </div>
-              <span>
-                <i></i> Disponível
-              </span>
-            </div>
-            <div className="slot-grid">
-              {slots.map((slot, index) => (
-                <button
-                  key={slot}
-                  className={selectedSlot === slot ? 'selected' : ''}
-                  onClick={() => setSelectedSlot(slot)}
-                >
-                  <span>
-                    <strong>{slot}</strong>
-                    <small>{index === 0 ? 'com Marina' : '2h reservadas'}</small>
-                  </span>
-                  {selectedSlot === slot && <Icon name="check" size={17} />}
-                </button>
-              ))}
-            </div>
-          </div>
-        </section>
+        ))}
+      </div>
+    </div>
+  )
+}
 
-        <aside className="schedule-summary">
-          <span className="summary-icon">
-            <Icon name="calendar" size={23} />
-          </span>
-          <p className="eyebrow">Sua escolha</p>
-          <h2>
-            Dia {selectedDay}, às {selectedSlot}
-          </h2>
-          <p>O espaço fica reservado exclusivamente para o seu pet durante todo o atendimento.</p>
-          <div className="schedule-benefits">
-            <span>
-              <Icon name="shield" size={17} /> Sem gaiolas ou esperas
-            </span>
-            <span>
-              <Icon name="clock" size={17} /> 2 horas com calma
-            </span>
-            <span>
-              <Icon name="user" size={17} /> Nenhum login necessário
-            </span>
+function PetView({
+  user,
+  pets,
+  onNeedAccount,
+  onCreate,
+  error,
+}: {
+  user: User | null
+  pets: Pet[]
+  onNeedAccount: () => void
+  onCreate: (event: FormEvent<HTMLFormElement>) => Promise<void>
+  error: string
+}) {
+  if (!user) {
+    return (
+      <div className="inner-page">
+        <div className="page-title">
+          <div>
+            <p className="eyebrow">Ficha</p>
+            <h1>Meus pets</h1>
+            <p>A ficha fica na conta.</p>
           </div>
-          <button className="primary-button" onClick={() => onBook(selectedSlot)}>
-            Continuar agendamento <Icon name="arrow" size={17} />
+          <button className="primary-button" onClick={onNeedAccount}>
+            Entrar
           </button>
-          <small>Depois, consulte a reserva usando o telefone informado.</small>
-        </aside>
+        </div>
       </div>
-    </div>
-  )
-}
-
-function PetView() {
+    )
+  }
+  if (user.role === 'admin') {
+    return (
+      <div className="inner-page">
+        <div className="page-title">
+          <div>
+            <h1>Meus pets</h1>
+            <p>A ficha do cliente abre na administração.</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="inner-page">
       <div className="page-title">
         <div>
-          <p className="eyebrow">Cuidado que conhece cada detalhe</p>
-          <h1>Perfil da Luna</h1>
-          <p>Preferências salvas para todos os atendimentos.</p>
+          <p className="eyebrow">Ficha</p>
+          <h1>Meus pets</h1>
+          <p>Nome, espécie, raça e porte. A raça é o texto que você informar.</p>
         </div>
-        <button className="secondary-button">Editar perfil</button>
       </div>
-      <div className="profile-grid">
-        <section className="pet-hero">
-          <img src={lunaPhoto} alt="Luna" />
-          <div>
-            <span className="status-pill">Ficha completa</span>
-            <h2>Luna</h2>
-            <p>Shih-tzu • 5 anos • 6,2 kg</p>
-            <div className="pet-tags">
-              <span>Dócil</span>
-              <span>Pele sensível</span>
-              <span>Gosta de pausas</span>
-            </div>
-          </div>
-        </section>
-        <section className="section-card preferences">
-          <h2>Preferências de cuidado</h2>
-          <div>
-            <span className="pref-icon">
-              <Icon name="leaf" />
-            </span>
-            <span>
-              <strong>Produtos</strong>
-              <p>Linha hipoalergênica, sem perfume</p>
-            </span>
-          </div>
-          <div>
-            <span className="pref-icon">
-              <Icon name="clock" />
-            </span>
-            <span>
-              <strong>Ritmo</strong>
-              <p>Secagem suave, com uma pausa curta</p>
-            </span>
-          </div>
-          <div>
-            <span className="pref-icon">
-              <Icon name="shield" />
-            </span>
-            <span>
-              <strong>Ambiente</strong>
-              <p>Sala silenciosa, longe do soprador</p>
-            </span>
-          </div>
-        </section>
-        <section className="section-card notes">
-          <p className="eyebrow">Observação importante</p>
-          <h2>Pele com tendência a irritação</h2>
+      {error && <p className="account-error">{error}</p>}
+      {pets.map((pet) => (
+        <section className="section-card" key={pet.id}>
+          <h2>{pet.name}</h2>
           <p>
-            Evitar produtos com fragrância e observar a região das patinhas. A equipe confirma os
-            produtos antes de cada banho.
+            {pet.species} · {pet.breed} · {pet.size}
           </p>
-          <span>Atualizado em 28 de maio</span>
         </section>
-      </div>
+      ))}
+      <form className="account-card" onSubmit={(event) => void onCreate(event)}>
+        <h2>Novo pet</h2>
+        <div className="account-grid">
+          <label>
+            Nome
+            <input name="name" required />
+          </label>
+          <label>
+            Espécie
+            <input name="species" required />
+          </label>
+          <label>
+            Raça
+            <input name="breed" required />
+          </label>
+          <label>
+            Porte
+            <select name="size" defaultValue="pequeno">
+              <option value="pequeno">pequeno</option>
+              <option value="medio">medio</option>
+              <option value="grande">grande</option>
+            </select>
+          </label>
+        </div>
+        <button className="primary-button" type="submit">
+          Salvar pet
+        </button>
+      </form>
     </div>
   )
 }
 
-function ReservationView() {
-  const [lookupPhone, setLookupPhone] = useState('')
-  const [searched, setSearched] = useState(false)
-  const [lookupError, setLookupError] = useState(false)
+function AccountView({ user, onUser }: { user: User | null; onUser: (user: User) => Promise<void> }) {
+  const [mode, setMode] = useState<'entrar' | 'cadastrar'>('entrar')
+  const [error, setError] = useState('')
+
+  async function onAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError('')
+    const form = new FormData(event.currentTarget)
+    const path = mode === 'entrar' ? '/api/conta/entrar' : '/api/conta/cadastro'
+    const payload =
+      mode === 'entrar'
+        ? { email: String(form.get('email') ?? ''), password: String(form.get('password') ?? '') }
+        : {
+            name: String(form.get('name') ?? ''),
+            email: String(form.get('email') ?? ''),
+            phone: String(form.get('phone') ?? ''),
+            cpf: String(form.get('cpf') ?? ''),
+            address: String(form.get('address') ?? ''),
+            password: String(form.get('password') ?? ''),
+          }
+    try {
+      const body = await lojaApi<{ user: User }>(path, { method: 'POST', body: JSON.stringify(payload) })
+      await onUser(body.user)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'não foi possível entrar')
+    }
+  }
+
+  if (user) {
+    return (
+      <div className="inner-page">
+        <div className="page-title">
+          <div>
+            <p className="eyebrow">Conta</p>
+            <h1>{user.name}</h1>
+            <p>
+              {user.email}
+              {user.cpfMasked ? ` · CPF ${user.cpfMasked}` : ''}
+            </p>
+          </div>
+        </div>
+        {user.role === 'admin' && (
+          <a className="primary-button" href="/painel">
+            Abrir a administração
+          </a>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div className="inner-page">
       <div className="page-title">
         <div>
-          <p className="eyebrow">Acesso sem conta</p>
-          <h1>Consulte sua reserva</h1>
-          <p>Use o mesmo telefone informado no agendamento.</p>
+          <p className="eyebrow">{mode === 'entrar' ? 'Entrar' : 'Cadastro'}</p>
+          <h1>{mode === 'entrar' ? 'Acesse sua conta' : 'Crie sua conta'}</h1>
+          <p>O agendamento fica ligado ao e-mail e à senha.</p>
         </div>
       </div>
-      <div className="reservation-lookup">
-        <span className="lookup-icon">
-          <Icon name="shield" size={28} />
-        </span>
-        <h2>Digite seu telefone</h2>
-        <p>Você não precisa criar conta ou lembrar uma senha.</p>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            const valid = lookupPhone.replace(/\D/g, '').length >= 10
-            setSearched(valid)
-            setLookupError(!valid)
-          }}
-        >
-          <label htmlFor="booking-lookup">Telefone do tutor</label>
-          <div>
-            <input
-              id="booking-lookup"
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              value={lookupPhone}
-              onChange={(event) => {
-                setLookupPhone(formatPhone(event.target.value))
-                setSearched(false)
-                setLookupError(false)
-              }}
-              placeholder="(51) 99999-9999"
-            />
-            <button className="primary-button" type="submit">
-              Consultar
+      <form className="account-card" onSubmit={(event) => void onAuth(event)}>
+        {error && <p className="account-error">{error}</p>}
+        {mode === 'cadastrar' && (
+          <div className="account-grid">
+            <label>
+              Nome
+              <input name="name" autoComplete="name" required />
+            </label>
+            <label>
+              Telefone
+              <input name="phone" autoComplete="tel" required />
+            </label>
+            <label>
+              CPF
+              <input name="cpf" inputMode="numeric" autoComplete="off" required />
+            </label>
+            <label>
+              Endereço
+              <input name="address" autoComplete="street-address" required />
+            </label>
+          </div>
+        )}
+        <div className="account-grid">
+          <label>
+            E-mail
+            <input name="email" type="email" autoComplete="email" required />
+          </label>
+          <label>
+            Senha
+            <input name="password" type="password" autoComplete={mode === 'entrar' ? 'current-password' : 'new-password'} required />
+          </label>
+        </div>
+        <div className="account-actions">
+          <button className="primary-button" type="submit">
+            {mode === 'entrar' ? 'Entrar' : 'Cadastrar'}
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => {
+              setError('')
+              setMode(mode === 'entrar' ? 'cadastrar' : 'entrar')
+            }}
+          >
+            {mode === 'entrar' ? 'Criar conta' : 'Já tenho conta'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function BookingModal({
+  user,
+  pets,
+  services,
+  onClose,
+  onNeedAccount,
+  onNeedPet,
+  onBooked,
+}: {
+  user: User | null
+  pets: Pet[]
+  services: Service[]
+  onClose: () => void
+  onNeedAccount: () => void
+  onNeedPet: () => void
+  onBooked: () => Promise<void>
+}) {
+  const [error, setError] = useState('')
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setError('')
+    const data = new FormData(event.currentTarget)
+    try {
+      await lojaApi('/api/agendamentos', {
+        method: 'POST',
+        body: JSON.stringify({
+          petId: String(data.get('petId') ?? ''),
+          serviceId: String(data.get('serviceId') ?? ''),
+          startsAt: shopInstant(String(data.get('startsAt') ?? '')),
+        }),
+      })
+      await onBooked()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'não foi possível agendar')
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="modal">
+        <button className="modal-close" onClick={onClose} aria-label="Fechar">
+          <Icon name="close" />
+        </button>
+        <p className="eyebrow">Agendamento</p>
+        {!user && (
+          <div className="step-content">
+            <h2>Entre para marcar o horário</h2>
+            <p>O horário fica na conta, com o pet já cadastrado.</p>
+            <button className="primary-button" onClick={onNeedAccount}>
+              Entrar
             </button>
           </div>
-        </form>
-        {lookupError && <p className="lookup-error">Informe um telefone válido com DDD.</p>}
-        {searched && (
-          <div className="lookup-result">
-            <Icon name="check" size={19} />
-            <span>
-              <strong>Reserva localizada</strong>
-              <small>18 de junho, às 09:00 • Banho dermatológico</small>
-            </span>
+        )}
+        {user?.role === 'admin' && (
+          <div className="step-content">
+            <h2>A marcação é da conta do cliente</h2>
+            <p>A loja confirma, remarca e cancela na administração.</p>
+            <a className="primary-button" href="/painel">
+              Abrir a administração
+            </a>
           </div>
+        )}
+        {user?.role === 'client' && pets.length === 0 && (
+          <div className="step-content">
+            <h2>Cadastre um pet antes</h2>
+            <button className="primary-button" onClick={onNeedPet}>
+              Ir para os pets
+            </button>
+          </div>
+        )}
+        {user?.role === 'client' && pets.length > 0 && (
+          <form className="step-content account-card" onSubmit={(event) => void onSubmit(event)}>
+            <h2>Escolha pet, serviço e minuto</h2>
+            <p>O relógio é o da loja, em São Paulo. O serviço precisa terminar dentro de um turno.</p>
+            {error && <p className="account-error">{error}</p>}
+            <label>
+              Pet
+              <select name="petId" required defaultValue="">
+                <option value="" disabled>
+                  escolha
+                </option>
+                {pets.map((pet) => (
+                  <option key={pet.id} value={pet.id}>
+                    {pet.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Serviço
+              <select name="serviceId" required defaultValue="">
+                <option value="" disabled>
+                  escolha
+                </option>
+                {services.map((service) => (
+                  <option key={service.id} value={service.id}>
+                    {service.name} · {service.durationMinutes} min
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Horário da loja
+              <input name="startsAt" type="datetime-local" required min={`${todayInShop()}T00:00`} />
+            </label>
+            <button className="primary-button" type="submit">
+              Confirmar agendamento
+            </button>
+          </form>
         )}
       </div>
     </div>
@@ -905,62 +943,38 @@ function ChatPanel({ onClose }: { onClose: () => void }) {
         </div>
         <div>
           <strong>Equipe Bicho Chique</strong>
-          <small>Online agora • resposta imediata</small>
+          <small>Demonstração. A mensagem não é enviada.</small>
         </div>
         <button onClick={onClose} aria-label="Fechar conversa">
           <Icon name="close" />
         </button>
       </div>
       <div className="chat-body">
-        <div className="chat-time">Hoje, 20:42</div>
-        <div className="bot-message">
-          Oi. Que bom ter você por aqui. Como podemos cuidar do seu pet hoje?
-        </div>
-        {messages.map((message, i) => (
-          <div className="user-message" key={i}>
+        <div className="bot-message">Esta conversa fica só nesta tela.</div>
+        {messages.map((message, index) => (
+          <div className="user-message" key={`${message}-${index}`}>
             {message}
           </div>
         ))}
-        {messages.length === 0 && (
-          <div className="quick-replies">
-            <button onClick={() => send('A pele da Luna está irritada')}>
-              A pele dela está irritada
-            </button>
-            <button onClick={() => send('Quero agendar um horário')}>
-              Quero agendar um horário
-            </button>
-            <button onClick={() => send('Tenho uma dúvida sobre o banho')}>
-              Tenho uma dúvida sobre o banho
-            </button>
-          </div>
-        )}
-        {messages.length > 0 && (
-          <div className="bot-message">
-            Entendi. Obrigada por contar isso. A pele sensível da Luna merece atenção especial. Você
-            percebeu vermelhidão, coceira ou alguma área mais sensível?
-          </div>
-        )}
       </div>
       <form
         className="chat-input"
-        onSubmit={(e) => {
-          e.preventDefault()
+        onSubmit={(event) => {
+          event.preventDefault()
           send(input)
         }}
       >
         <input
           value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Conte o que está acontecendo..."
+          onChange={(event) => setInput(event.target.value)}
+          placeholder="Escreva uma mensagem de demonstração"
           aria-label="Mensagem"
         />
         <button aria-label="Enviar">
           <Icon name="send" size={19} />
         </button>
       </form>
-      <div className="chat-security">
-        <Icon name="shield" size={13} /> Seus dados estão protegidos
-      </div>
     </div>
   )
 }
+

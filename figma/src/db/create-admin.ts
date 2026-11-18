@@ -55,12 +55,24 @@ async function main() {
       return
     }
 
-    const rl = createInterface({ input: stdin, output: stdout })
-    const name = (await rl.question('nome: ')).trim().replace(/\s+/g, ' ')
-    const email = (await rl.question('e-mail: ')).trim().toLowerCase()
-    rl.close()
-    const password = await askHidden('senha: ')
-    const again = await askHidden('senha de novo: ')
+    const fromEnv = process.env.ADMIN_NAME && process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD
+    let name: string
+    let email: string
+    let password: string
+    let again: string
+    if (fromEnv) {
+      name = process.env.ADMIN_NAME!.trim().replace(/\s+/g, ' ')
+      email = process.env.ADMIN_EMAIL!.trim().toLowerCase()
+      password = process.env.ADMIN_PASSWORD!
+      again = password
+    } else {
+      const rl = createInterface({ input: stdin, output: stdout })
+      name = (await rl.question('nome: ')).trim().replace(/\s+/g, ' ')
+      email = (await rl.question('e-mail: ')).trim().toLowerCase()
+      rl.close()
+      password = await askHidden('senha: ')
+      again = await askHidden('senha de novo: ')
+    }
 
     if (
       name.length < 2 ||
