@@ -1818,3 +1818,73 @@ main {
 .figma-bypass-link:focus {
   transform: translateY(0);
 }
+
+a.reservation-access,
+a.primary-button {
+  text-decoration: none;
+}
+.account-page {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 28px max(5vw, 28px) 64px;
+  display: grid;
+  gap: 22px;
+}
+.account-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: 0 18px 50px rgba(36, 54, 47, 0.09);
+  display: grid;
+  gap: 14px;
+}
+.account-card h1,
+.account-card h2 {
+  font-family: 'DM Serif Display', Georgia, serif;
+  font-weight: 400;
+}
+.account-card p,
+.account-muted {
+  color: #718077;
+  font-size: 14px;
+}
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.account-card label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: #596860;
+}
+.account-card input,
+.account-card select {
+  min-height: 42px;
+  border: 1px solid #deddd5;
+  border-radius: 8px;
+  padding: 0 12px;
+  background: #fff;
+  color: #202627;
+}
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.account-error {
+  color: #9b3b3b;
+  font-size: 14px;
+}
+.account-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #eee;
+}
+.account-row p {
+  color: #202627;
+}

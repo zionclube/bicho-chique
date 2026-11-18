@@ -212,6 +212,9 @@ export default function App() {
           ))}
         </nav>
         <div className="header-actions">
+          <a className="reservation-access" href="/conta">
+            Entrar
+          </a>
           <button className="reservation-access" onClick={() => setActiveTab('reserva')}>
             <Icon name="shield" size={17} />
             <span>Consultar reserva</span>
