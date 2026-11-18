@@ -40,5 +40,10 @@ export default buildFigmaConfig({
     defaultLocale: 'en',
   },
   plugins: [mcpPlugin({})],
-  figma: {},
+  figma: {
+    useContentSystem: false,
+    storage: false,
+    environmentId: 'bicho-chique',
+    contentSystemId: 'bicho-chique',
+  },
 })
